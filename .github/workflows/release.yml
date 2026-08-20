@@ -1,0 +1,255 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target to build without publishing a release
+        required: true
+        default: linux-x86_64
+        type: choice
+        options:
+          - linux-x86_64
+          - linux-aarch64
+          - macos-aarch64
+          - macos-x86_64
+          - windows-x86_64
+          - all
+
+# Release publication and attestations need these permissions. Jobs narrow them
+# further where possible. GitHub supplies the short-lived OIDC and API tokens.
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+env:
+  CARGO_AUDIT_VERSION: "0.22.2"
+  CARGO_AUDITABLE_VERSION: "0.7.5"
+  CARGO_DENY_VERSION: "0.20.2"
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.90.0"
+
+jobs:
+  security:
+    name: Test and audit dependencies
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+
+      - name: Confirm the dependency lockfile
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Install pinned dependency scanners
+        shell: bash
+        run: |
+          cargo install cargo-audit --version "=$CARGO_AUDIT_VERSION" --locked --force
+          cargo install cargo-deny --version "=$CARGO_DENY_VERSION" --locked --force
+
+      - name: Audit Cargo.lock with RustSec
+        run: cargo audit
+
+      - name: Enforce the dependency advisory policy
+        run: cargo deny --locked check advisories
+
+  plan:
+    name: Plan release targets
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Check out the release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Require the tag to match the bproof version
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/bproof/Cargo.toml)
+          test -n "$package_version"
+          if [[ "$GITHUB_REF_NAME" != "v$package_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match bproof version $package_version" >&2
+            exit 1
+          fi
+
+      - name: Select build targets
+        id: matrix
+        env:
+          SELECTED_TARGET: ${{ inputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          matrix=$(jq -cn '{include: [
+            {name: "linux-x86_64", runner: "ubuntu-24.04", target: "x86_64-unknown-linux-gnu", asset: "bproof-linux-x86_64"},
+            {name: "linux-aarch64", runner: "ubuntu-24.04-arm", target: "aarch64-unknown-linux-gnu", asset: "bproof-linux-aarch64"},
+            {name: "macos-aarch64", runner: "macos-15", target: "aarch64-apple-darwin", asset: "bproof-macos-aarch64"},
+            {name: "macos-x86_64", runner: "macos-15-intel", target: "x86_64-apple-darwin", asset: "bproof-macos-x86_64"},
+            {name: "windows-x86_64", runner: "windows-2025", target: "x86_64-pc-windows-msvc", asset: "bproof-windows-x86_64.exe"}
+          ]}')
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$SELECTED_TARGET" != "all" ]]; then
+            matrix=$(jq -c --arg name "$SELECTED_TARGET" \
+              '{include: [.include[] | select(.name == $name)]}' <<< "$matrix")
+          fi
+
+          if [[ $(jq '.include | length' <<< "$matrix") -eq 0 ]]; then
+            echo "No build target matched $SELECTED_TARGET" >&2
+            exit 1
+          fi
+
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs:
+      - security
+      - plan
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Check out the release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned Rust toolchain and target
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$TARGET" --no-self-update
+
+      - name: Install cargo-auditable
+        shell: bash
+        run: cargo install cargo-auditable --version "=$CARGO_AUDITABLE_VERSION" --locked --force
+
+      - name: Build the auditable binary
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: cargo auditable build --release --locked --target "$TARGET" --bin bproof
+
+      - name: Stage the binary and checksum
+        if: runner.os != 'Windows'
+        env:
+          ASSET_NAME: ${{ matrix.asset }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/$TARGET/release/bproof" "dist/$ASSET_NAME"
+          chmod 0755 "dist/$ASSET_NAME"
+          (cd dist && shasum -a 256 "$ASSET_NAME" > SHA256SUMS)
+          (cd dist && shasum -a 256 -c SHA256SUMS)
+
+      - name: Stage the binary and checksum
+        if: runner.os == 'Windows'
+        env:
+          ASSET_NAME: ${{ matrix.asset }}
+          TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/$env:TARGET/release/bproof.exe" "dist/$env:ASSET_NAME"
+          $hash = (Get-FileHash "dist/$env:ASSET_NAME" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumPath = Join-Path $PWD "dist/SHA256SUMS"
+          [System.IO.File]::WriteAllText(
+            $checksumPath,
+            "$hash  $env:ASSET_NAME`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          $actual = (Get-FileHash "dist/$env:ASSET_NAME" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $hash) {
+            throw "Staged binary checksum changed"
+          }
+
+      - name: Attest the binary
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: dist/${{ matrix.asset }}
+
+      - name: Upload the dry-run release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.name }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download built binaries and checksums
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: release-inputs
+
+      - name: Assemble and verify release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find release-inputs -mindepth 2 -maxdepth 2 -type f ! -name SHA256SUMS \
+            -exec cp '{}' dist/ \;
+          find release-inputs -mindepth 2 -maxdepth 2 -type f -name SHA256SUMS \
+            -exec cat '{}' + | tr -d '\r' | LC_ALL=C sort -k2 > dist/SHA256SUMS
+
+          asset_count=$(find dist -maxdepth 1 -type f -name 'bproof-*' | wc -l | tr -d ' ')
+          if [[ "$asset_count" -ne 5 ]]; then
+            echo "Expected 5 binaries, found $asset_count" >&2
+            exit 1
+          fi
+
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: Attest the checksum manifest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: dist/SHA256SUMS
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

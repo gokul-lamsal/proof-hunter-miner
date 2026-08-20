@@ -70,6 +70,13 @@ get a progress report. Add `--json` for machine-readable event lines.
 Every subcommand documents itself: `bproof --help`,
 `bproof mine --help`, `bproof wallet --help`, `bproof status --help`.
 
+## Download a release
+
+Download the binary for your system from
+[GitHub Releases](https://github.com/vltgoblin/proof-hunter-miner/releases).
+Before you run it, follow [Verify a miner release](docs/verifying-a-release.md)
+to check its GitHub build attestation and SHA-256 checksum.
+
 ## Check things yourself
 
 ```sh
