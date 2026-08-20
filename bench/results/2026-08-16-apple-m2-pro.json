@@ -1,0 +1,529 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-08-16T04:22:42.603Z",
+  "host": {
+    "platform": "darwin",
+    "product": "macOS",
+    "productVersion": "26.5.2",
+    "release": "25.5.0",
+    "architecture": "arm64",
+    "hardwareModel": "Mac14,10",
+    "cpu": "Apple M2 Pro",
+    "logicalCpus": 12,
+    "memoryBytes": 17179869184
+  },
+  "methodology": {
+    "location": "real browser Web Workers served from localhost",
+    "runs": 9,
+    "attemptsPerRun": 250000,
+    "warmupAttempts": 50000,
+    "sampleOrder": "alternating WASM-first and JavaScript-first",
+    "digestGate": "four shared vectors must equal native proof-core before timing",
+    "ratio": "median WASM hashes/second divided by median JavaScript hashes/second",
+    "spread": "minimum, maximum, p25 and p75 hashes/second"
+  },
+  "wasm": {
+    "moduleBytes": 23419,
+    "directRustDependency": "wasm-bindgen 0.2.127",
+    "newRegistryCrateCount": 12,
+    "newRegistryCrates": [
+      "bumpalo 3.20.3",
+      "cfg-if 1.0.4",
+      "once_cell 1.21.4",
+      "proc-macro2 1.0.107",
+      "quote 1.0.47",
+      "rustversion 1.0.23",
+      "syn 2.0.119",
+      "unicode-ident 1.0.24",
+      "wasm-bindgen 0.2.127",
+      "wasm-bindgen-macro 0.2.127",
+      "wasm-bindgen-macro-support 0.2.127",
+      "wasm-bindgen-shared 0.2.127"
+    ],
+    "proofRule": "unchanged proof-core path dependency"
+  },
+  "javascript": {
+    "permutation": "@noble/hashes 2.3.0 keccakP",
+    "tuning": "pre-absorbed constant rate block; reusable typed arrays; fixed-layout tail absorption; in-place uint256 increment; no allocation per attempt"
+  },
+  "browsers": [
+    {
+      "browser": "chrome",
+      "status": "measured",
+      "installedVersion": "Google Chrome 151.0.7922.138",
+      "mode": "headless Web Worker",
+      "ok": true,
+      "browserLabel": "chrome",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+      "hardwareConcurrency": 12,
+      "worker": true,
+      "wasmColdStartMs": 14.300000011920929,
+      "vectorAgreement": [
+        {
+          "id": "small-mining-nonce",
+          "expectedDigest": "0xe0728a02790ebf24be70574538af0f2e326940edc70ae1114a464f9e9adbb6d1",
+          "wasmDigest": "0xe0728a02790ebf24be70574538af0f2e326940edc70ae1114a464f9e9adbb6d1",
+          "javascriptDigest": "0xe0728a02790ebf24be70574538af0f2e326940edc70ae1114a464f9e9adbb6d1",
+          "agreed": true
+        },
+        {
+          "id": "maximum-mining-nonce",
+          "expectedDigest": "0x2d283617f3625a1cb8890a4287050a6ad9e51eb33e98174df059c8a6cf9923f6",
+          "wasmDigest": "0x2d283617f3625a1cb8890a4287050a6ad9e51eb33e98174df059c8a6cf9923f6",
+          "javascriptDigest": "0x2d283617f3625a1cb8890a4287050a6ad9e51eb33e98174df059c8a6cf9923f6",
+          "agreed": true
+        },
+        {
+          "id": "zero-address-and-mining-nonce",
+          "expectedDigest": "0x68d30e5336eeaed0191320852c02a7f058bff050aafccd64c119a260704b6909",
+          "wasmDigest": "0x68d30e5336eeaed0191320852c02a7f058bff050aafccd64c119a260704b6909",
+          "javascriptDigest": "0x68d30e5336eeaed0191320852c02a7f058bff050aafccd64c119a260704b6909",
+          "agreed": true
+        },
+        {
+          "id": "u32-boundary",
+          "expectedDigest": "0x5f8bb979059f5a69e68eb1ed3fb184c7ce8e59f3752c073946dd3e4de283b70d",
+          "wasmDigest": "0x5f8bb979059f5a69e68eb1ed3fb184c7ce8e59f3752c073946dd3e4de283b70d",
+          "javascriptDigest": "0x5f8bb979059f5a69e68eb1ed3fb184c7ce8e59f3752c073946dd3e4de283b70d",
+          "agreed": true
+        }
+      ],
+      "settings": {
+        "runs": 9,
+        "attempts": 250000,
+        "warmupAttempts": 50000,
+        "order": "alternating"
+      },
+      "wasm": {
+        "samples": [
+          {
+            "run": 1,
+            "elapsedMs": 137.0999999642372,
+            "hashesPerSecond": 1823486.506675514,
+            "checksum": 2882163272
+          },
+          {
+            "run": 2,
+            "elapsedMs": 132.5,
+            "hashesPerSecond": 1886792.4528301887,
+            "checksum": 1373538287
+          },
+          {
+            "run": 3,
+            "elapsedMs": 131.0999999642372,
+            "hashesPerSecond": 1906941.2667291956,
+            "checksum": 3133008356
+          },
+          {
+            "run": 4,
+            "elapsedMs": 173.80000001192093,
+            "hashesPerSecond": 1438434.982640118,
+            "checksum": 2476106539
+          },
+          {
+            "run": 5,
+            "elapsedMs": 135.70000004768372,
+            "hashesPerSecond": 1842299.1887409901,
+            "checksum": 1649331520
+          },
+          {
+            "run": 6,
+            "elapsedMs": 133.5,
+            "hashesPerSecond": 1872659.1760299625,
+            "checksum": 1167937280
+          },
+          {
+            "run": 7,
+            "elapsedMs": 135.19999998807907,
+            "hashesPerSecond": 1849112.4261985437,
+            "checksum": 2213002553
+          },
+          {
+            "run": 8,
+            "elapsedMs": 135.39999997615814,
+            "hashesPerSecond": 1846381.0933827264,
+            "checksum": 694934891
+          },
+          {
+            "run": 9,
+            "elapsedMs": 133.5999999642372,
+            "hashesPerSecond": 1871257.4855308486,
+            "checksum": 3033454016
+          }
+        ],
+        "summary": {
+          "medianHashesPerSecond": 1849112.4261985437,
+          "minHashesPerSecond": 1438434.982640118,
+          "maxHashesPerSecond": 1906941.2667291956,
+          "p25HashesPerSecond": 1842299.1887409901,
+          "p75HashesPerSecond": 1872659.1760299625
+        }
+      },
+      "javascript": {
+        "samples": [
+          {
+            "run": 1,
+            "elapsedMs": 773.5,
+            "hashesPerSecond": 323206.20555914677,
+            "checksum": 2882163272
+          },
+          {
+            "run": 2,
+            "elapsedMs": 760.6999999880791,
+            "hashesPerSecond": 328644.6693886128,
+            "checksum": 1373538287
+          },
+          {
+            "run": 3,
+            "elapsedMs": 765.9000000357628,
+            "hashesPerSecond": 326413.3698763893,
+            "checksum": 3133008356
+          },
+          {
+            "run": 4,
+            "elapsedMs": 768.1999999880791,
+            "hashesPerSecond": 325436.0843580832,
+            "checksum": 2476106539
+          },
+          {
+            "run": 5,
+            "elapsedMs": 766.4000000357628,
+            "hashesPerSecond": 326200.41752131283,
+            "checksum": 1649331520
+          },
+          {
+            "run": 6,
+            "elapsedMs": 759.5,
+            "hashesPerSecond": 329163.92363396974,
+            "checksum": 1167937280
+          },
+          {
+            "run": 7,
+            "elapsedMs": 783.8000000119209,
+            "hashesPerSecond": 318958.91808649874,
+            "checksum": 2213002553
+          },
+          {
+            "run": 8,
+            "elapsedMs": 783.9000000357628,
+            "hashesPerSecond": 318918.229351441,
+            "checksum": 694934891
+          },
+          {
+            "run": 9,
+            "elapsedMs": 796.3000000119209,
+            "hashesPerSecond": 313952.02812540176,
+            "checksum": 3033454016
+          }
+        ],
+        "summary": {
+          "medianHashesPerSecond": 325436.0843580832,
+          "minHashesPerSecond": 313952.02812540176,
+          "maxHashesPerSecond": 329163.92363396974,
+          "p25HashesPerSecond": 318958.91808649874,
+          "p75HashesPerSecond": 326413.3698763893
+        }
+      },
+      "checksumAgreement": [
+        {
+          "run": 1,
+          "wasm": 2882163272,
+          "javascript": 2882163272,
+          "agreed": true
+        },
+        {
+          "run": 2,
+          "javascript": 1373538287,
+          "wasm": 1373538287,
+          "agreed": true
+        },
+        {
+          "run": 3,
+          "wasm": 3133008356,
+          "javascript": 3133008356,
+          "agreed": true
+        },
+        {
+          "run": 4,
+          "javascript": 2476106539,
+          "wasm": 2476106539,
+          "agreed": true
+        },
+        {
+          "run": 5,
+          "wasm": 1649331520,
+          "javascript": 1649331520,
+          "agreed": true
+        },
+        {
+          "run": 6,
+          "javascript": 1167937280,
+          "wasm": 1167937280,
+          "agreed": true
+        },
+        {
+          "run": 7,
+          "wasm": 2213002553,
+          "javascript": 2213002553,
+          "agreed": true
+        },
+        {
+          "run": 8,
+          "javascript": 694934891,
+          "wasm": 694934891,
+          "agreed": true
+        },
+        {
+          "run": 9,
+          "wasm": 3033454016,
+          "javascript": 3033454016,
+          "agreed": true
+        }
+      ],
+      "wasmToJavascriptRatio": 5.681952663134712,
+      "workerStartToCompletedBenchmarkMs": 8446.400000035763
+    },
+    {
+      "browser": "firefox",
+      "status": "measured",
+      "installedVersion": "Mozilla Firefox 138.0.1",
+      "mode": "headless Web Worker",
+      "ok": true,
+      "browserLabel": "firefox",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:138.0) Gecko/20100101 Firefox/138.0",
+      "hardwareConcurrency": 12,
+      "worker": true,
+      "wasmColdStartMs": 46,
+      "vectorAgreement": [
+        {
+          "id": "small-mining-nonce",
+          "expectedDigest": "0xe0728a02790ebf24be70574538af0f2e326940edc70ae1114a464f9e9adbb6d1",
+          "wasmDigest": "0xe0728a02790ebf24be70574538af0f2e326940edc70ae1114a464f9e9adbb6d1",
+          "javascriptDigest": "0xe0728a02790ebf24be70574538af0f2e326940edc70ae1114a464f9e9adbb6d1",
+          "agreed": true
+        },
+        {
+          "id": "maximum-mining-nonce",
+          "expectedDigest": "0x2d283617f3625a1cb8890a4287050a6ad9e51eb33e98174df059c8a6cf9923f6",
+          "wasmDigest": "0x2d283617f3625a1cb8890a4287050a6ad9e51eb33e98174df059c8a6cf9923f6",
+          "javascriptDigest": "0x2d283617f3625a1cb8890a4287050a6ad9e51eb33e98174df059c8a6cf9923f6",
+          "agreed": true
+        },
+        {
+          "id": "zero-address-and-mining-nonce",
+          "expectedDigest": "0x68d30e5336eeaed0191320852c02a7f058bff050aafccd64c119a260704b6909",
+          "wasmDigest": "0x68d30e5336eeaed0191320852c02a7f058bff050aafccd64c119a260704b6909",
+          "javascriptDigest": "0x68d30e5336eeaed0191320852c02a7f058bff050aafccd64c119a260704b6909",
+          "agreed": true
+        },
+        {
+          "id": "u32-boundary",
+          "expectedDigest": "0x5f8bb979059f5a69e68eb1ed3fb184c7ce8e59f3752c073946dd3e4de283b70d",
+          "wasmDigest": "0x5f8bb979059f5a69e68eb1ed3fb184c7ce8e59f3752c073946dd3e4de283b70d",
+          "javascriptDigest": "0x5f8bb979059f5a69e68eb1ed3fb184c7ce8e59f3752c073946dd3e4de283b70d",
+          "agreed": true
+        }
+      ],
+      "settings": {
+        "runs": 9,
+        "attempts": 250000,
+        "warmupAttempts": 50000,
+        "order": "alternating"
+      },
+      "wasm": {
+        "samples": [
+          {
+            "run": 1,
+            "elapsedMs": 170,
+            "hashesPerSecond": 1470588.2352941176,
+            "checksum": 2882163272
+          },
+          {
+            "run": 2,
+            "elapsedMs": 191,
+            "hashesPerSecond": 1308900.5235602094,
+            "checksum": 1373538287
+          },
+          {
+            "run": 3,
+            "elapsedMs": 196,
+            "hashesPerSecond": 1275510.2040816327,
+            "checksum": 3133008356
+          },
+          {
+            "run": 4,
+            "elapsedMs": 161,
+            "hashesPerSecond": 1552795.0310559005,
+            "checksum": 2476106539
+          },
+          {
+            "run": 5,
+            "elapsedMs": 161,
+            "hashesPerSecond": 1552795.0310559005,
+            "checksum": 1649331520
+          },
+          {
+            "run": 6,
+            "elapsedMs": 195,
+            "hashesPerSecond": 1282051.282051282,
+            "checksum": 1167937280
+          },
+          {
+            "run": 7,
+            "elapsedMs": 169,
+            "hashesPerSecond": 1479289.9408284023,
+            "checksum": 2213002553
+          },
+          {
+            "run": 8,
+            "elapsedMs": 164,
+            "hashesPerSecond": 1524390.243902439,
+            "checksum": 694934891
+          },
+          {
+            "run": 9,
+            "elapsedMs": 164,
+            "hashesPerSecond": 1524390.243902439,
+            "checksum": 3033454016
+          }
+        ],
+        "summary": {
+          "medianHashesPerSecond": 1479289.9408284023,
+          "minHashesPerSecond": 1275510.2040816327,
+          "maxHashesPerSecond": 1552795.0310559005,
+          "p25HashesPerSecond": 1308900.5235602094,
+          "p75HashesPerSecond": 1524390.243902439
+        }
+      },
+      "javascript": {
+        "samples": [
+          {
+            "run": 1,
+            "elapsedMs": 1232,
+            "hashesPerSecond": 202922.07792207794,
+            "checksum": 2882163272
+          },
+          {
+            "run": 2,
+            "elapsedMs": 1349,
+            "hashesPerSecond": 185322.46108228317,
+            "checksum": 1373538287
+          },
+          {
+            "run": 3,
+            "elapsedMs": 1407,
+            "hashesPerSecond": 177683.01350390902,
+            "checksum": 3133008356
+          },
+          {
+            "run": 4,
+            "elapsedMs": 1362,
+            "hashesPerSecond": 183553.59765051393,
+            "checksum": 2476106539
+          },
+          {
+            "run": 5,
+            "elapsedMs": 1327,
+            "hashesPerSecond": 188394.87565938206,
+            "checksum": 1649331520
+          },
+          {
+            "run": 6,
+            "elapsedMs": 1389,
+            "hashesPerSecond": 179985.60115190785,
+            "checksum": 1167937280
+          },
+          {
+            "run": 7,
+            "elapsedMs": 1433,
+            "hashesPerSecond": 174459.17655268667,
+            "checksum": 2213002553
+          },
+          {
+            "run": 8,
+            "elapsedMs": 1349,
+            "hashesPerSecond": 185322.46108228317,
+            "checksum": 694934891
+          },
+          {
+            "run": 9,
+            "elapsedMs": 1227,
+            "hashesPerSecond": 203748.9812550937,
+            "checksum": 3033454016
+          }
+        ],
+        "summary": {
+          "medianHashesPerSecond": 185322.46108228317,
+          "minHashesPerSecond": 174459.17655268667,
+          "maxHashesPerSecond": 203748.9812550937,
+          "p25HashesPerSecond": 179985.60115190785,
+          "p75HashesPerSecond": 188394.87565938206
+        }
+      },
+      "checksumAgreement": [
+        {
+          "run": 1,
+          "wasm": 2882163272,
+          "javascript": 2882163272,
+          "agreed": true
+        },
+        {
+          "run": 2,
+          "javascript": 1373538287,
+          "wasm": 1373538287,
+          "agreed": true
+        },
+        {
+          "run": 3,
+          "wasm": 3133008356,
+          "javascript": 3133008356,
+          "agreed": true
+        },
+        {
+          "run": 4,
+          "javascript": 2476106539,
+          "wasm": 2476106539,
+          "agreed": true
+        },
+        {
+          "run": 5,
+          "wasm": 1649331520,
+          "javascript": 1649331520,
+          "agreed": true
+        },
+        {
+          "run": 6,
+          "javascript": 1167937280,
+          "wasm": 1167937280,
+          "agreed": true
+        },
+        {
+          "run": 7,
+          "wasm": 2213002553,
+          "javascript": 2213002553,
+          "agreed": true
+        },
+        {
+          "run": 8,
+          "javascript": 694934891,
+          "wasm": 694934891,
+          "agreed": true
+        },
+        {
+          "run": 9,
+          "wasm": 3033454016,
+          "javascript": 3033454016,
+          "agreed": true
+        }
+      ],
+      "wasmToJavascriptRatio": 7.982248520710058,
+      "workerStartToCompletedBenchmarkMs": 14095
+    },
+    {
+      "browser": "safari",
+      "status": "skipped",
+      "installedVersion": "Included with Safari 26.5.2 (21624.2.5.11.8)",
+      "reason": "Could not create a session: You must enable 'Allow remote automation' in the Developer section of Safari Settings to control Safari via WebDriver."
+    }
+  ]
+}

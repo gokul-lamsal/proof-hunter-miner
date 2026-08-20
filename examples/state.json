@@ -1,0 +1,11 @@
+{
+  "chainId": "4663",
+  "miningCore": "0x2222222222222222222222222222222222222222",
+  "challengeId": "19",
+  "previousAcceptedDigest": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+  "seedParentBlock": "22345678",
+  "seedBlockhash": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+  "target": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "acceptedProofs": "0",
+  "totalMintedWei": "0"
+}

@@ -1,0 +1,23 @@
+[package]
+name = "proof-benchmark-wasm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+proof-core = { path = "../../crates/proof-core" }
+wasm-bindgen = "=0.2.127"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+# Keep benchmark-only dependencies out of the production miner lockfile.
+[workspace]
+

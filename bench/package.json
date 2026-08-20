@@ -1,0 +1,14 @@
+{
+  "name": "bonded-proof-wasm-benchmark",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "benchmark": "npm run verify:native-vectors && npm run build:wasm && node scripts/run-browser-benchmark.mjs",
+    "test": "node --test scripts/*.test.mjs && npm run verify:native-vectors",
+    "verify:native-vectors": "node scripts/verify-native-vectors.mjs"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.3.0"
+  }
+}
