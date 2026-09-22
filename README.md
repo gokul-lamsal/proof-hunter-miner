@@ -51,6 +51,8 @@ The search uses the core's base target. It does not optimize mining for an attac
 NFT's boosted effective target. `schedule` and `--state-file` remain legacy offline
 calculation tools; their token schedule is not the current live settlement model.
 
+See [wallet funding and gas limits](docs/getting-started.md) for the setup flow.
+
 ## Network profiles and AI agents
 
 The network launcher in [distribution](distribution/README.md) defaults to testnet.

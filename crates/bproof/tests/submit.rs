@@ -153,11 +153,14 @@ fn live_anvil_mines_and_submits_one_real_proof() {
     assert!(wallet_stderr.is_empty());
     let wallet: Value = serde_json::from_slice(wallet_stdout.as_slice()).unwrap();
     let miner = wallet["address"].as_str().unwrap().to_owned();
-    rpc(
-        &endpoint,
-        "anvil_setBalance",
-        json!([miner, "0xde0b6b3a7640000"]),
-    );
+    // Fund the new wallet through an actual transfer, as an external wallet does.
+    let accounts = rpc(&endpoint, "eth_accounts", json!([]));
+    let funding_hash = rpc(&endpoint, "eth_sendTransaction", json!([{
+        "from": accounts[0], "to": miner, "value": "0xde0b6b3a7640000"
+    }]));
+    let funding_receipt = rpc(&endpoint, "eth_getTransactionReceipt", json!([funding_hash]));
+    assert_eq!(funding_receipt["status"], "0x1");
+    assert_eq!(rpc(&endpoint, "eth_getBalance", json!([miner, "latest"])), "0xde0b6b3a7640000");
 
     let project_token = mining_core_child_address(&endpoint, "PROOF_NFT()");
     let reward_before = token_balance(&endpoint, &project_token, &miner);
