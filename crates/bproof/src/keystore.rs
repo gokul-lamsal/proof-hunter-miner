@@ -229,7 +229,7 @@ pub fn read_passphrase(
                 ));
             }
             ensure_core_dumps_disabled()?;
-            return Ok(SecretPassphrase(bytes));
+            return Ok(SecretPassphrase(bytes.into()));
         }
     }
     refuse_environment_passphrase()?;
