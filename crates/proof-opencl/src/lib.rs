@@ -64,7 +64,7 @@ __kernel void mine(__global const uchar* prefix,__global const uchar* target,__g
   for(int i=0;i<17;i++){ulong v=0;for(int k=0;k<8;k++)v|=((ulong)prefix[i*8+k])<<(8*k);a[i]^=v;}perm(a);
   for(int i=0;i<11;i++){ulong v=0;for(int k=0;k<8;k++)v|=((ulong)prefix[136+i*8+k])<<(8*k);a[i]^=v;}
   a[11]^=rev(n[0]);a[12]^=rev(n[1]);a[13]^=rev(n[2]);a[14]^=rev(n[3]);a[15]^=1UL;a[16]^=0x8000000000000000UL;perm(a);
-  uchar h[32];for(int i=0;i<4;i++)for(int k=0;k<8;k++)h[i*8+k]=(uchar)(a[i]>>(8*k));uint bits=0;for(int i=0;i<32;i++){if(h[i]==0)bits+=8;else{uint v=(uint)h[i];while((v&0x80U)==0){bits++;v<<=1;}break;}}atomic_max(bestbits,bits);int accepted=1;for(int i=0;i<32;i++){if(h[i]<target[i])break;if(h[i]>target[i]){accepted=0;break;}}if(accepted&&atomic_cmpxchg(found,0,1)==0){for(int i=0;i<4;i++)out_nonce[i]=n[i];for(int i=0;i<32;i++)out_hash[i]=h[i];}}
+  uchar h[32];for(int i=0;i<4;i++)for(int k=0;k<8;k++)h[i*8+k]=(uchar)(a[i]>>(8*k));uint bits=0;for(int i=0;i<32;i++){if(h[i]==0)bits+=8;else{uint v=(uint)h[i];while((v&0x80U)==0){bits++;v<<=1;}break;}}atomic_max(bestbits,bits);int accepted=1;for(int i=0;i<32;i++){if(h[i]<target[i])break;if(h[i]>target[i]){accepted=0;break;}}if(accepted&&atomic_cmpxchg(found,0,1)==0){for(int i=0;i<4;i++)out_nonce[i]=n[i];for(int i=0;i<32;i++)out_hash[i]=h[i];mem_fence(CLK_GLOBAL_MEM_FENCE);}}
 }
 "#;
 
@@ -135,7 +135,7 @@ fn device_loop(index: usize, device: Device, request: Request, cursor: Arc<Atomi
         let mut local_best = vec![0_u32; 1]; best_buffer.read(&mut local_best).enq().map_err(|e| e.to_string())?;
         bestbits.fetch_max(u64::from(local_best[0]), Ordering::AcqRel);
         let mut flag = vec![0_u32; 1]; found_buffer.read(&mut flag).enq().map_err(|e| e.to_string())?;
-        if flag[0] != 0 { let mut words=vec![0_u64;4];let mut bytes=vec![0_u8;32];nonce_buffer.read(&mut words).enq().map_err(|e| e.to_string())?;hash_buffer.read(&mut bytes).enq().map_err(|e| e.to_string())?;let nonce=words_to_nonce(words.try_into().unwrap());let digest=Digest::from_bytes(bytes.try_into().unwrap());if meets_target(digest,request.target)&&proof_digest(&ProofInputs{chain_id:request.challenge_inputs.chain_id,mining_core:request.challenge_inputs.mining_core,challenge_id:request.challenge_inputs.challenge_id,challenge:derive_challenge(&request.challenge_inputs),miner:request.miner,nonce})==digest {found.store(true,Ordering::Release);return Ok(Some((nonce,digest)));}return Err(format!("OpenCL device {index} returned a candidate that failed canonical CPU verification")); }
+        if flag[0] != 0 { let mut words=vec![0_u64;4];nonce_buffer.read(&mut words).enq().map_err(|e| e.to_string())?;let nonce=words_to_nonce(words.try_into().unwrap());let canonical=proof_digest(&ProofInputs{chain_id:request.challenge_inputs.chain_id,mining_core:request.challenge_inputs.mining_core,challenge_id:request.challenge_inputs.challenge_id,challenge:derive_challenge(&request.challenge_inputs),miner:request.miner,nonce});if meets_target(canonical,request.target) {found.store(true,Ordering::Release);return Ok(Some((nonce,canonical)));}let reset=vec![0_u32;1];found_buffer.write(&reset).enq().map_err(|e| e.to_string())?;queue.finish().map_err(|e| e.to_string())?;eprintln!("OpenCL device {index} discarded an invalid candidate; continuing"); }
     }
     Ok(None)
 }
