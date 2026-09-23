@@ -13,6 +13,40 @@ target/release/bproof --help
 target/release/bproof wallet new --help
 ```
 
+### OpenCL GPU mining
+
+The optional OpenCL backend hashes the same canonical Ethereum Keccak-256
+proof preimage as the CPU backend. It enumerates every OpenCL GPU visible to
+the process and partitions nonce ranges across them. The Rust verifier checks
+the returned nonce before the existing simulation, signing, journal, and
+receipt-validation path is used.
+
+On a Linux GPU host, install the NVIDIA driver and OpenCL ICD/runtime first,
+then verify that `clinfo` lists the GPUs. Build with:
+
+```sh
+apt-get update
+apt-get install -y build-essential pkg-config ocl-icd-libopencl1 ocl-icd-opencl-dev clinfo
+clinfo | grep -E 'Device Name|Platform Name'
+cargo build --release --locked --features bproof/opencl --bin bproof
+```
+
+Run all detected GPUs with `--backend opencl`:
+
+```sh
+BPROOF_OPENCL_GLOBAL=1048576 BPROOF_OPENCL_ITERS=16 \
+target/release/bproof mine --backend opencl --submit --loop \
+  --rpc-url "$RPC_URL" --chain-id "$CHAIN_ID" --mining-core "$MINING_CORE" \
+  --basket "$BASKET" --keystore ./miner-wallet.json \
+  --max-fee "$MAX_TOTAL_FEE_WEI"
+```
+
+`BPROOF_OPENCL_GLOBAL` and `BPROOF_OPENCL_ITERS` control batch size per GPU;
+increase them only after checking memory use and stale-challenge latency.
+`--threads` controls CPU workers and is ignored by the OpenCL backend. If no
+OpenCL GPU is visible, the command fails clearly; it does not silently submit
+CPU work under a GPU label.
+
 Create a dedicated encrypted mining wallet using `wallet new`. Keep the recovery
 file private. The CLI signs with that wallet, not the browser's MetaMask account.
 Phase 1 is live on Robinhood mainnet (4663). Use the verified settings in

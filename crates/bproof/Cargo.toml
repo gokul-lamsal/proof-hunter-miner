@@ -11,12 +11,16 @@ chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["
 clap = { version = "4.5", features = ["derive"] }
 ctrlc = { version = "3.5.2", default-features = false }
 proof-core = { path = "../proof-core" }
+proof-opencl = { path = "../proof-opencl", optional = true }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 rpassword = "7.5.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 zeroize = "1.9.0"
+
+[features]
+opencl = ["dep:proof-opencl"]
 
 [target.'cfg(unix)'.dependencies]
 rlimit = "0.11.0"

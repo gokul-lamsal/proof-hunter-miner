@@ -34,6 +34,17 @@ impl MiningControl {
     pub fn is_stopped(&self) -> bool {
         self.stop.load(Ordering::Acquire)
     }
+
+    pub(crate) fn stop_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MiningBackend {
+    #[default]
+    Cpu,
+    Opencl,
 }
 
 /// Inputs for one local mining run.
@@ -44,6 +55,7 @@ pub struct MiningRequest {
     pub start_nonce: Uint256,
     pub threads: usize,
     pub max_attempts: Option<u64>,
+    pub backend: MiningBackend,
 }
 
 /// The aggregate result across all stride workers.
@@ -98,6 +110,37 @@ pub fn mine(request: MiningRequest) -> Result<MiningResult, String> {
 
 /// Mines until a proof, the attempt cap, or an external watcher stops the work.
 pub fn mine_with_control(
+    request: MiningRequest,
+    control: MiningControl,
+) -> Result<MiningResult, String> {
+    if request.backend == MiningBackend::Opencl {
+        #[cfg(feature = "opencl")]
+        {
+            return mine_opencl(request, control);
+        }
+        #[cfg(not(feature = "opencl"))]
+        return Err("OpenCL backend is not compiled; rebuild with --features bproof/opencl".to_owned());
+    }
+    mine_cpu_with_control(request, control)
+}
+
+#[cfg(feature = "opencl")]
+fn mine_opencl(request: MiningRequest, control: MiningControl) -> Result<MiningResult, String> {
+    let result = proof_opencl::mine(proof_opencl::Request {
+        challenge_inputs: request.challenge_inputs,
+        miner: request.miner,
+        target: request.target,
+        start_nonce: request.start_nonce,
+        max_attempts: request.max_attempts,
+    }, control.stop_flag())?;
+    Ok(match result {
+        proof_opencl::Result::Found { nonce, digest, attempts, devices } => MiningResult::Found { mining_nonce: nonce, digest, attempts, threads: devices },
+        proof_opencl::Result::Exhausted { attempts, devices } => MiningResult::Exhausted { attempts, threads: devices },
+        proof_opencl::Result::Abandoned { attempts, devices } => MiningResult::Abandoned { attempts, threads: devices },
+    })
+}
+
+fn mine_cpu_with_control(
     request: MiningRequest,
     control: MiningControl,
 ) -> Result<MiningResult, String> {
@@ -418,6 +461,7 @@ mod tests {
                 start_nonce: Uint256::ZERO,
                 threads: 2,
                 max_attempts: None,
+                backend: MiningBackend::Cpu,
             },
             control,
         )
@@ -432,6 +476,7 @@ mod tests {
             start_nonce: Uint256::ZERO,
             threads: 2,
             max_attempts: None,
+            backend: MiningBackend::Cpu,
         })
         .unwrap();
         assert!(matches!(

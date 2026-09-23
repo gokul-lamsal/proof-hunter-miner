@@ -17,7 +17,7 @@ use crate::chain::{
 };
 use crate::classification::{NftClassificationSnapshot, ProofClassification, classify_proof};
 use crate::continuous::{ContinuousRequest, DEFAULT_WATCH_INTERVAL};
-use crate::mining::{MiningRequest, MiningResult};
+use crate::mining::{MiningBackend, MiningRequest, MiningResult};
 use crate::output::{
     FeeRefusedOutput, MineExhaustedOutput, MineFoundOutput, ScheduleNextOutput,
     ScheduleSummaryOutput, StatusOutput, SubmissionOutput, SubmissionRejectedOutput, VerifyOutput,
@@ -169,6 +169,9 @@ struct VerifyArgs {
 
 #[derive(Debug, Args)]
 struct MineArgs {
+    /// Search backend: cpu or opencl. OpenCL uses every detected device.
+    #[arg(long, default_value = "cpu", value_parser = ["cpu", "opencl"])]
+    backend: String,
     /// Read live state directly from this HTTP or HTTPS JSON-RPC endpoint.
     #[arg(long)]
     rpc_url: Option<String>,
@@ -507,6 +510,7 @@ fn run_mine(args: MineArgs, json: bool) -> Result<RunResult, String> {
     let seed_parent_block = challenge_inputs.seed_parent_block;
     let seed_blockhash = challenge_inputs.seed_blockhash;
     let threads = parse_threads(args.threads.as_deref())?;
+    let backend = parse_backend(&args.backend)?;
     let start_nonce = match &args.start_nonce {
         Some(value) => parse_nonce(value, "--start-nonce")?,
         None => Uint256::ZERO,
@@ -528,6 +532,7 @@ fn run_mine(args: MineArgs, json: bool) -> Result<RunResult, String> {
         start_nonce,
         threads,
         max_attempts,
+        backend,
     })? {
         MiningResult::Found {
             mining_nonce,
@@ -629,6 +634,7 @@ fn run_continuous_mine(
         "--mining-core",
     )?;
     let threads = parse_threads(args.threads.as_deref())?;
+    let backend = parse_backend(&args.backend)?;
     let start_nonce = match &args.start_nonce {
         Some(value) => parse_nonce(value, "--start-nonce")?,
         None => Uint256::ZERO,
@@ -657,6 +663,7 @@ fn run_continuous_mine(
             threads,
             start_nonce,
             watch_interval,
+            backend,
         },
         json,
     )?;
@@ -1359,6 +1366,14 @@ fn parse_threads(value: Option<&str>) -> Result<usize, String> {
     }
 
     usize::try_from(threads).map_err(|_| "--threads exceeds this platform's usize range".to_owned())
+}
+
+fn parse_backend(value: &str) -> Result<MiningBackend, String> {
+    match value {
+        "cpu" => Ok(MiningBackend::Cpu),
+        "opencl" => Ok(MiningBackend::Opencl),
+        _ => Err("--backend must be cpu or opencl".to_owned()),
+    }
 }
 
 #[cfg(test)]

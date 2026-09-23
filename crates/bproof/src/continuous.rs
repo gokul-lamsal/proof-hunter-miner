@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 use crate::chain::{CHAIN_STATE_SOURCE, ChallengeMarker, ChallengeStatus, RpcChainReader};
 use crate::classification::{ProofClassification, classify_proof};
-use crate::mining::{MiningControl, MiningRequest, MiningResult, mine_with_control};
+use crate::mining::{MiningBackend, MiningControl, MiningRequest, MiningResult, mine_with_control};
 use crate::parse::{hex_string, parse_address, uint256_to_decimal};
 use crate::submit::{
     FeeOptions, FeeQuote, PROOF_HUNTER_FEE_WARNING, PreparationOutcome, SUBMISSION_WARNING,
@@ -38,6 +38,7 @@ pub struct ContinuousRequest {
     pub threads: usize,
     pub start_nonce: Uint256,
     pub watch_interval: Duration,
+    pub backend: MiningBackend,
 }
 
 pub struct ContinuousResult {
@@ -777,6 +778,7 @@ fn watched_mine(
             start_nonce: request.start_nonce,
             threads: request.threads,
             max_attempts: None,
+            backend: request.backend,
         },
         control.clone(),
     );
@@ -1164,6 +1166,7 @@ mod tests {
             threads: 2,
             start_nonce: Uint256::ZERO,
             watch_interval: Duration::from_millis(1),
+            backend: MiningBackend::Cpu,
         };
         let shutdown = Arc::new(AtomicBool::new(false));
         let result = watched_mine(
