@@ -60,11 +60,11 @@ ulong rev(ulong x){return ((x&0xffUL)<<56)|((x&0xff00UL)<<40)|((x&0xff0000UL)<<2
 void add_offset(__private ulong n[4],__private ulong off){for(int i=3;i>=0;i--){ulong old=n[i];n[i]+=off;off=(n[i]<old)?1UL:0UL;if(!off)break;}}
 __kernel void mine(__global const uchar* prefix,__global const uchar* target,__global const ulong* base,ulong offset,ulong valid,uint iters,volatile __global uint* found,__global ulong* out_nonce,__global uchar* out_hash,volatile __global uint* bestbits){
  ulong gid=get_global_id(0); ulong stride=get_global_size(0); ulong n_off=offset+gid*iters;
- for(uint it=0;it<iters;it++){if(n_off+it>=valid||found[0])return; ulong n[4]={base[0],base[1],base[2],base[3]};add_offset(n,n_off+it); ulong a[25];for(int i=0;i<25;i++)a[i]=0;
+ for(uint it=0;it<iters;it++){if(gid*iters+(ulong)it>=valid||found[0])return; ulong n[4]={base[0],base[1],base[2],base[3]};add_offset(n,n_off+(ulong)it); ulong a[25];for(int i=0;i<25;i++)a[i]=0;
   for(int i=0;i<17;i++){ulong v=0;for(int k=0;k<8;k++)v|=((ulong)prefix[i*8+k])<<(8*k);a[i]^=v;}perm(a);
   for(int i=0;i<11;i++){ulong v=0;for(int k=0;k<8;k++)v|=((ulong)prefix[136+i*8+k])<<(8*k);a[i]^=v;}
   a[11]^=rev(n[0]);a[12]^=rev(n[1]);a[13]^=rev(n[2]);a[14]^=rev(n[3]);a[15]^=1UL;a[16]^=0x8000000000000000UL;perm(a);
-  uchar h[32];for(int i=0;i<4;i++)for(int k=0;k<8;k++)h[i*8+k]=(uchar)(a[i]>>(8*k));uint bits=0;for(int i=0;i<32;i++){if(h[i]==0)bits+=8;else{uint v=(uint)h[i];while((v&0x80U)==0){bits++;v<<=1;}break;}}atomic_max(bestbits,bits);int accepted=1;for(int i=0;i<32;i++){if(h[i]<target[i])break;if(h[i]>target[i]){accepted=0;break;}}if(accepted&&atomic_cmpxchg(found,0,1)==0){for(int i=0;i<4;i++)out_nonce[i]=n[i];for(int i=0;i<32;i++)out_hash[i]=h[i];}n_off+=stride;}
+  uchar h[32];for(int i=0;i<4;i++)for(int k=0;k<8;k++)h[i*8+k]=(uchar)(a[i]>>(8*k));uint bits=0;for(int i=0;i<32;i++){if(h[i]==0)bits+=8;else{uint v=(uint)h[i];while((v&0x80U)==0){bits++;v<<=1;}break;}}atomic_max(bestbits,bits);int accepted=1;for(int i=0;i<32;i++){if(h[i]<target[i])break;if(h[i]>target[i]){accepted=0;break;}}if(accepted&&atomic_cmpxchg(found,0,1)==0){for(int i=0;i<4;i++)out_nonce[i]=n[i];for(int i=0;i<32;i++)out_hash[i]=h[i];}}
 }
 "#;
 
@@ -119,6 +119,7 @@ fn device_loop(index: usize, device: Device, request: Request, cursor: Arc<Atomi
     let nonce_buffer = Buffer::<u64>::builder().queue(queue.clone()).flags(MemFlags::READ_WRITE).len(4).fill_val(0).build().map_err(|e| e.to_string())?;
     let hash_buffer = Buffer::<u8>::builder().queue(queue.clone()).flags(MemFlags::READ_WRITE).len(32).fill_val(0).build().map_err(|e| e.to_string())?;
     let best_buffer = Buffer::<u32>::builder().queue(queue.clone()).flags(MemFlags::READ_WRITE).len(1).fill_val(0).build().map_err(|e| e.to_string())?;
+    gpu_self_test(index, &queue, &program, &prefix, &base_buffer, &found_buffer, &nonce_buffer, &hash_buffer, &best_buffer, request)?;
     let global = std::env::var("BPROOF_OPENCL_GLOBAL").ok().and_then(|x| x.parse::<usize>().ok()).filter(|x| *x > 0).unwrap_or(1 << 20);
     let iters = std::env::var("BPROOF_OPENCL_ITERS").ok().and_then(|x| x.parse::<u32>().ok()).filter(|x| *x > 0).unwrap_or(16);
     loop {
@@ -137,6 +138,24 @@ fn device_loop(index: usize, device: Device, request: Request, cursor: Arc<Atomi
         if flag[0] != 0 { let mut words=vec![0_u64;4];let mut bytes=vec![0_u8;32];nonce_buffer.read(&mut words).enq().map_err(|e| e.to_string())?;hash_buffer.read(&mut bytes).enq().map_err(|e| e.to_string())?;let nonce=words_to_nonce(words.try_into().unwrap());let digest=Digest::from_bytes(bytes.try_into().unwrap());if meets_target(digest,request.target)&&proof_digest(&ProofInputs{chain_id:request.challenge_inputs.chain_id,mining_core:request.challenge_inputs.mining_core,challenge_id:request.challenge_inputs.challenge_id,challenge:derive_challenge(&request.challenge_inputs),miner:request.miner,nonce})==digest {found.store(true,Ordering::Release);return Ok(Some((nonce,digest)));}return Err(format!("OpenCL device {index} returned a candidate that failed canonical CPU verification")); }
     }
     Ok(None)
+}
+
+fn gpu_self_test(index: usize, queue: &Queue, program: &Program, prefix: &Buffer<u8>, base: &Buffer<u64>, found: &Buffer<u32>, nonce: &Buffer<u64>, hash: &Buffer<u8>, best: &Buffer<u32>, request: Request) -> std::result::Result<(), String> {
+    let target = Buffer::builder().queue(queue.clone()).flags(MemFlags::READ_ONLY | MemFlags::COPY_HOST_PTR).len(32).copy_host_slice(&[0xff_u8; 32]).build().map_err(|e| format!("OpenCL device {index} self-test target: {e}"))?;
+    let zero = vec![0_u32; 1];
+    found.write(&zero).enq().map_err(|e| format!("OpenCL device {index} self-test reset: {e}"))?;
+    let kernel = Kernel::builder().program(program).name("mine").queue(queue.clone()).global_work_size(1).arg(prefix).arg(&target).arg(base).arg(0_u64).arg(1_u64).arg(1_u32).arg(found).arg(nonce).arg(hash).arg(best).build().map_err(|e| format!("OpenCL device {index} self-test kernel: {e}"))?;
+    // The self-test is deliberately one work-item; it validates the kernel's
+    // byte order and two-block padding before any result can be submitted.
+    unsafe { kernel.enq().map_err(|e| format!("OpenCL device {index} self-test enqueue: {e}"))?; }
+    queue.finish().map_err(|e| format!("OpenCL device {index} self-test finish: {e}"))?;
+    let mut flag = vec![0_u32; 1]; let mut words = vec![0_u64; 4]; let mut bytes = vec![0_u8; 32];
+    found.read(&mut flag).enq().map_err(|e| e.to_string())?; nonce.read(&mut words).enq().map_err(|e| e.to_string())?; hash.read(&mut bytes).enq().map_err(|e| e.to_string())?;
+    if flag[0] == 0 { return Err(format!("OpenCL device {index} self-test found no result")); }
+    let actual_nonce = words_to_nonce(words.try_into().unwrap()); let actual_digest = Digest::from_bytes(bytes.try_into().unwrap());
+    let expected_digest = proof_digest(&ProofInputs { chain_id: request.challenge_inputs.chain_id, mining_core: request.challenge_inputs.mining_core, challenge_id: request.challenge_inputs.challenge_id, challenge: derive_challenge(&request.challenge_inputs), miner: request.miner, nonce: actual_nonce });
+    if actual_digest != expected_digest { return Err(format!("OpenCL device {index} self-test failed: kernel digest does not match canonical Keccak")); }
+    Ok(())
 }
 
 fn report_progress(attempts: Arc<AtomicU64>, bestbits: Arc<AtomicU64>, done: Arc<AtomicBool>, target: Target, devices: usize) {
