@@ -37,6 +37,7 @@ const REDACTED: &str = "[REDACTED]";
 const UNLOCK_FAILED: &str = "could not unlock keystore; check the file and passphrase";
 
 pub const PASSPHRASE_ENVIRONMENT_VARIABLE: &str = "BPROOF_PASSPHRASE";
+const ALLOW_INSECURE_PASSPHRASE_ENVIRONMENT_VARIABLE: &str = "BPROOF_ALLOW_INSECURE_PASSPHRASE";
 const PASSPHRASE_ENVIRONMENT_VARIABLES: [&str; 4] = [
     PASSPHRASE_ENVIRONMENT_VARIABLE,
     "BPROOF_KEYSTORE_PASSPHRASE",
@@ -214,6 +215,23 @@ pub fn read_passphrase(
     source: PassphraseSource<'_>,
     confirm_prompt: bool,
 ) -> Result<SecretPassphrase, String> {
+    if matches!(source, PassphraseSource::Prompt)
+        && std::env::var(ALLOW_INSECURE_PASSPHRASE_ENVIRONMENT_VARIABLE).as_deref() == Ok("1")
+    {
+        if let Some(value) = std::env::var_os(PASSPHRASE_ENVIRONMENT_VARIABLE) {
+            let bytes = value.to_string_lossy().as_bytes().to_vec();
+            if bytes.is_empty() {
+                return Err(format!("{PASSPHRASE_ENVIRONMENT_VARIABLE} must not be empty"));
+            }
+            if bytes.len() as u64 > MAX_PASSPHRASE_BYTES {
+                return Err(format!(
+                    "{PASSPHRASE_ENVIRONMENT_VARIABLE} exceeds the maximum passphrase length"
+                ));
+            }
+            ensure_core_dumps_disabled()?;
+            return Ok(SecretPassphrase(bytes));
+        }
+    }
     refuse_environment_passphrase()?;
     ensure_core_dumps_disabled()?;
 
