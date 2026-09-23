@@ -1,6 +1,7 @@
 //! Command definitions and local `bproof` dispatch.
 
 use std::time::Duration;
+use std::thread;
 use std::{fmt, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
@@ -498,7 +499,7 @@ fn run_mine(args: MineArgs, json: bool) -> Result<RunResult, String> {
             return submission_result(mined, miner, "seedRefresh", None, json);
         }
     }
-    let resolved = resolve_mine_state(&args, miner)?;
+    let resolved = resolve_mine_state_with_retry(&args, miner)?;
     let challenge_inputs = resolved.challenge_inputs;
     let target = resolved.target;
     let state_source = resolved.state_source;
@@ -1366,6 +1367,37 @@ fn parse_threads(value: Option<&str>) -> Result<usize, String> {
     }
 
     usize::try_from(threads).map_err(|_| "--threads exceeds this platform's usize range".to_owned())
+}
+
+fn resolve_mine_state_with_retry(
+    args: &MineArgs,
+    miner: proof_core::Address,
+) -> Result<ResolvedMineState, String> {
+    let Some(_) = args.rpc_url else {
+        return resolve_mine_state(args, miner);
+    };
+    let retry_seconds = std::env::var("BPROOF_CHALLENGE_RETRY_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(5);
+    loop {
+        match resolve_mine_state(args, miner) {
+            Ok(state) => return Ok(state),
+            Err(error) if is_seed_parent_not_ready(&error) => {
+                eprintln!(
+                    "challenge not active yet; retrying in {retry_seconds}s: {error}"
+                );
+                thread::sleep(Duration::from_secs(retry_seconds));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn is_seed_parent_not_ready(error: &str) -> bool {
+    error.contains("challenge unavailable: seed parent block")
+        && error.contains("has not passed at EVM parent block")
 }
 
 fn parse_backend(value: &str) -> Result<MiningBackend, String> {
