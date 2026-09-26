@@ -14,7 +14,7 @@ use proof_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::chain::RpcChainReader;
+use crate::chain::{BatchCall, RpcChainReader, batch_string};
 use crate::parse::{
     hex_string, parse_address, parse_decimal_uint256, parse_digest, parse_hex_bytes,
     parse_hex_quantity_uint256, parse_u64, parse_u128, parse_uint256_word, uint256_to_decimal,
@@ -235,33 +235,80 @@ fn prepare_call(
 ) -> Result<PreparationOutcome, String> {
     let call = transaction_call(miner, core, &call_data);
 
-    if let Err(error) = reader.rpc_result(
-        "proof simulation",
-        "eth_call",
-        json!([call.clone(), "latest"]),
-    ) {
+    // A found proof is only worth minting while it reaches the chain quickly, so
+    // every read needed to sign it is issued together instead of one round trip
+    // at a time. All of these are reads; nothing here can spend or broadcast.
+    let mut calls = vec![
+        BatchCall::new(
+            "proof simulation",
+            "eth_call",
+            json!([call.clone(), "latest"]),
+        ),
+        BatchCall::new("proof gas estimate", "eth_estimateGas", json!([call])),
+    ];
+    let base_fee = fee_options
+        .base_fee_per_gas_override_wei
+        .is_none()
+        .then(|| {
+            calls.push(BatchCall::new(
+                "latest block base fee",
+                "eth_getBlockByNumber",
+                json!(["latest", false]),
+            ));
+            calls.len() - 1
+        });
+    let priority_fee = fee_options
+        .priority_fee_per_gas_override_wei
+        .is_none()
+        .then(|| {
+            calls.push(BatchCall::new(
+                "priority fee quote",
+                "eth_maxPriorityFeePerGas",
+                json!([]),
+            ));
+            calls.len() - 1
+        });
+    calls.push(BatchCall::new(
+        "miner account transaction count",
+        "eth_getTransactionCount",
+        json!([hex_string(&miner.to_bytes()), "pending"]),
+    ));
+    let account_nonce_index = calls.len() - 1;
+    let results = reader.rpc_batch(&calls);
+
+    // A stale challenge reverts the simulation. That is a lost race, not an
+    // endpoint failure, so it must not be reported as a transient RPC error.
+    if let Err(error) = &results[0] {
         if error.contains("JSON-RPC proof simulation failed with error") {
             return Ok(PreparationOutcome::SimulationRejected {
-                reason: disambiguate_mining_nonce(&error),
+                reason: disambiguate_mining_nonce(error),
             });
         }
-        return Err(error);
+        return Err(error.clone());
     }
 
-    let estimated_gas_text =
-        reader.string_result("proof gas estimate", "eth_estimateGas", json!([call]))?;
+    let estimated_gas_text = batch_string(&results[1], "proof gas estimate")?;
     let estimated_gas = uint256_to_u64(
         parse_hex_quantity_uint256(&estimated_gas_text, "eth_estimateGas result")?,
         "eth_estimateGas result",
     )?;
-    let base_fee_per_gas_wei = match fee_options.base_fee_per_gas_override_wei {
-        Some(value) => value,
-        None => read_base_fee_per_gas(reader)?,
+    let base_fee_per_gas_wei = match (fee_options.base_fee_per_gas_override_wei, base_fee) {
+        (Some(value), _) => value,
+        (None, Some(index)) => {
+            base_fee_per_gas_from_block(results[index].as_ref().map_err(Clone::clone)?)?
+        }
+        (None, None) => return Err("internal base fee read was not issued".to_owned()),
     };
-    let priority_fee_per_gas_wei = match fee_options.priority_fee_per_gas_override_wei {
-        Some(value) => value,
-        None => read_priority_fee_per_gas(reader)?,
-    };
+    let priority_fee_per_gas_wei =
+        match (fee_options.priority_fee_per_gas_override_wei, priority_fee) {
+            (Some(value), _) => value,
+            (None, Some(index)) => {
+                let text = batch_string(&results[index], "priority fee quote")
+                    .map_err(priority_fee_error)?;
+                priority_fee_per_gas_from_text(&text).map_err(priority_fee_error)?
+            }
+            (None, None) => return Err("internal priority fee read was not issued".to_owned()),
+        };
     let fee_quote = fee_quote(
         base_fee_per_gas_wei,
         priority_fee_per_gas_wei,
@@ -273,10 +320,9 @@ fn prepare_call(
         return Ok(PreparationOutcome::FeeRefused(fee_quote));
     }
 
-    let account_nonce_text = reader.string_result(
+    let account_nonce_text = batch_string(
+        &results[account_nonce_index],
         "miner account transaction count",
-        "eth_getTransactionCount",
-        json!([hex_string(&miner.to_bytes()), "pending"]),
     )?;
     let account_nonce = parse_hex_quantity_uint256(
         &account_nonce_text,
@@ -305,6 +351,13 @@ fn prepare_call(
         basket: Address::from_bytes([0; 20]),
         transaction,
     })))
+}
+
+/// Adds the operator hint for a node that cannot quote a priority fee.
+fn priority_fee_error(error: String) -> String {
+    format!(
+        "{error}; use --priority-fee-per-gas to provide the tip in raw wei when the node does not offer eth_maxPriorityFeePerGas"
+    )
 }
 
 #[must_use]
@@ -751,12 +804,7 @@ fn transaction_call(from: Address, to: Address, data: &[u8]) -> Value {
     })
 }
 
-fn read_base_fee_per_gas(reader: &RpcChainReader) -> Result<u128, String> {
-    let block = reader.rpc_result(
-        "latest block base fee",
-        "eth_getBlockByNumber",
-        json!(["latest", false]),
-    )?;
+fn base_fee_per_gas_from_block(block: &Value) -> Result<u128, String> {
     let base_fee = block
         .as_object()
         .and_then(|fields| fields.get("baseFeePerGas"))
@@ -771,20 +819,9 @@ fn read_base_fee_per_gas(reader: &RpcChainReader) -> Result<u128, String> {
     )
 }
 
-fn read_priority_fee_per_gas(reader: &RpcChainReader) -> Result<u128, String> {
-    let priority_fee = reader
-        .string_result(
-            "priority fee quote",
-            "eth_maxPriorityFeePerGas",
-            json!([]),
-        )
-        .map_err(|error| {
-            format!(
-                "{error}; use --priority-fee-per-gas to provide the tip in raw wei when the node does not offer eth_maxPriorityFeePerGas"
-            )
-        })?;
+fn priority_fee_per_gas_from_text(priority_fee: &str) -> Result<u128, String> {
     uint256_to_u128(
-        parse_hex_quantity_uint256(&priority_fee, "eth_maxPriorityFeePerGas result")?,
+        parse_hex_quantity_uint256(priority_fee, "eth_maxPriorityFeePerGas result")?,
         "eth_maxPriorityFeePerGas result",
     )
 }
@@ -1933,16 +1970,7 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let body = read_request_body(&mut stream);
             let request: Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(request["method"], "eth_call");
-            let response = json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "error": {
-                    "code": 3,
-                    "message": "execution reverted: StaleChallengeId(1, 2)"
-                }
-            })
-            .to_string();
+            let response = simulation_revert_response(&request);
             write_response(&mut stream, &response);
             listener.set_nonblocking(true).unwrap();
             thread::sleep(Duration::from_millis(100));
@@ -1951,6 +1979,34 @@ mod tests {
             );
         });
         (endpoint, server)
+    }
+
+    /// Reverts the `eth_call` in whatever shape it was requested, so the
+    /// rejection holds whether the reads are batched or issued one at a time.
+    fn simulation_revert_response(request: &Value) -> String {
+        let revert = json!({
+            "code": 3,
+            "message": "execution reverted: StaleChallengeId(1, 2)"
+        });
+        let request = request
+            .as_array()
+            .map_or_else(|| vec![request.clone()], Vec::clone);
+        let responses = request
+            .iter()
+            .map(|entry| {
+                let id = entry["id"].clone();
+                if entry["method"] == "eth_call" {
+                    json!({ "jsonrpc": "2.0", "id": id, "error": revert })
+                } else {
+                    json!({ "jsonrpc": "2.0", "id": id, "result": "0x5208" })
+                }
+            })
+            .collect::<Vec<_>>();
+        if responses.len() == 1 {
+            responses[0].to_string()
+        } else {
+            Value::Array(responses).to_string()
+        }
     }
 
     fn read_request_body(stream: &mut TcpStream) -> Vec<u8> {

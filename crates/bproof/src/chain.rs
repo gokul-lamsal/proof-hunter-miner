@@ -169,7 +169,56 @@ impl RpcChainReader {
             "method": method,
             "params": params,
         });
-        let request_body = serde_json::to_string(&request)
+        let response = self.post(operation, &request)?;
+        decode_rpc_response(operation, RPC_ID, response)
+    }
+
+    /// Issues read-only calls in one round trip, falling back to sequential
+    /// requests when the endpoint cannot serve a JSON-RPC batch.
+    ///
+    /// Only ever call this with reads. Falling back re-issues the calls, so a
+    /// batched call must never carry a side effect such as a signed send.
+    pub(crate) fn rpc_batch(&self, calls: &[BatchCall<'_>]) -> Vec<Result<Value, String>> {
+        if calls.len() < 2 {
+            return calls
+                .iter()
+                .map(|call| self.rpc_result(call.operation, call.method, call.params.clone()))
+                .collect();
+        }
+
+        let requests: Vec<Value> = calls
+            .iter()
+            .enumerate()
+            .map(|(index, call)| {
+                json!({
+                    "jsonrpc": "2.0",
+                    // Distinct ids let a response be matched to its request even
+                    // when a node answers a batch out of order.
+                    "id": index + 1,
+                    "method": call.method,
+                    "params": call.params,
+                })
+            })
+            .collect();
+
+        // A node that rejects batching, answers with one object instead of an
+        // array, or reuses an id cannot be trusted to have served every call, so
+        // the whole batch is reissued sequentially. Every call here is a read.
+        let Some(decoded) = self
+            .post(calls[0].operation, &Value::Array(requests))
+            .ok()
+            .and_then(|response| decode_rpc_batch(calls, response))
+        else {
+            return calls
+                .iter()
+                .map(|call| self.rpc_result(call.operation, call.method, call.params.clone()))
+                .collect();
+        };
+        decoded
+    }
+
+    fn post(&self, operation: &str, request: &Value) -> Result<Value, String> {
+        let request_body = serde_json::to_string(request)
             .map_err(|error| format!("failed to encode JSON-RPC {operation} request: {error}"))?;
         let mut response = self
             .agent
@@ -203,39 +252,8 @@ impl RpcChainReader {
                     "failed to read JSON-RPC {operation} response within the {RPC_RESPONSE_LIMIT_BYTES}-byte limit: {error}"
                 )
             })?;
-        let response: Value = serde_json::from_str(&body)
-            .map_err(|error| format!("JSON-RPC {operation} returned non-JSON body: {error}"))?;
-        let fields = response
-            .as_object()
-            .ok_or_else(|| format!("JSON-RPC {operation} response must be an object"))?;
-        if fields.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-            return Err(format!(
-                "JSON-RPC {operation} response has an invalid `jsonrpc` version"
-            ));
-        }
-        if fields.get("id").and_then(Value::as_u64) != Some(RPC_ID) {
-            return Err(format!(
-                "JSON-RPC {operation} response has an unexpected `id`"
-            ));
-        }
-
-        if let Some(error) = fields.get("error").filter(|error| !error.is_null()) {
-            let code = error
-                .get("code")
-                .map_or_else(|| "unknown code".to_owned(), |value| value.to_string());
-            let message = error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("missing error message");
-            return Err(format!(
-                "JSON-RPC {operation} failed with error {code}: {message}"
-            ));
-        }
-
-        fields
-            .get("result")
-            .cloned()
-            .ok_or_else(|| format!("JSON-RPC {operation} response is missing `result`"))
+        serde_json::from_str(&body)
+            .map_err(|error| format!("JSON-RPC {operation} returned non-JSON body: {error}"))
     }
 
     pub(crate) fn string_result(
@@ -549,6 +567,113 @@ impl RpcChainReader {
         validate_contract_code(&code)?;
         Ok(block_tag)
     }
+}
+
+/// One read-only call inside a [`RpcChainReader::rpc_batch`] round trip.
+pub(crate) struct BatchCall<'a> {
+    pub operation: &'a str,
+    pub method: &'a str,
+    pub params: Value,
+}
+
+impl<'a> BatchCall<'a> {
+    pub(crate) fn new(operation: &'a str, method: &'a str, params: Value) -> Self {
+        Self {
+            operation,
+            method,
+            params,
+        }
+    }
+}
+
+fn decode_rpc_response(
+    operation: &str,
+    expected_id: u64,
+    response: Value,
+) -> Result<Value, String> {
+    let fields = response
+        .as_object()
+        .ok_or_else(|| format!("JSON-RPC {operation} response must be an object"))?;
+    if fields.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Err(format!(
+            "JSON-RPC {operation} response has an invalid `jsonrpc` version"
+        ));
+    }
+    if fields.get("id").and_then(Value::as_u64) != Some(expected_id) {
+        return Err(format!(
+            "JSON-RPC {operation} response has an unexpected `id`"
+        ));
+    }
+
+    if let Some(error) = fields.get("error").filter(|error| !error.is_null()) {
+        let code = error
+            .get("code")
+            .map_or_else(|| "unknown code".to_owned(), |value| value.to_string());
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("missing error message");
+        return Err(format!(
+            "JSON-RPC {operation} failed with error {code}: {message}"
+        ));
+    }
+
+    fields
+        .get("result")
+        .cloned()
+        .ok_or_else(|| format!("JSON-RPC {operation} response is missing `result`"))
+}
+
+/// Decodes a batch reply, matching each response to its request by id.
+///
+/// Returns `None` when the reply is not a usable batch, so the caller can fall
+/// back to sequential requests. A per-call JSON-RPC error is a usable reply and
+/// is returned as that call's own `Err`.
+fn decode_rpc_batch(
+    calls: &[BatchCall<'_>],
+    response: Value,
+) -> Option<Vec<Result<Value, String>>> {
+    let entries = response.as_array()?.clone();
+    if entries.len() != calls.len() {
+        return None;
+    }
+
+    let mut by_id: Vec<Option<Value>> = vec![None; calls.len()];
+    for entry in entries {
+        let id = entry.get("id").and_then(Value::as_u64)?;
+        let slot = usize::try_from(id.checked_sub(1)?).ok()?;
+        // A repeated id would leave a call unanswered and another answered twice.
+        if slot >= by_id.len() || by_id[slot].is_some() {
+            return None;
+        }
+        by_id[slot] = Some(entry);
+    }
+
+    by_id
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let entry = entry?;
+            Some(decode_rpc_response(
+                calls[index].operation,
+                index as u64 + 1,
+                entry,
+            ))
+        })
+        .collect()
+}
+
+/// Reads one string result from an already-issued batch entry.
+pub(crate) fn batch_string(
+    result: &Result<Value, String>,
+    operation: &str,
+) -> Result<String, String> {
+    result
+        .as_ref()
+        .map_err(Clone::clone)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("JSON-RPC {operation} result must be a string"))
 }
 
 impl ChallengeStatus {
@@ -1306,6 +1431,221 @@ mod tests {
             }
         });
         (endpoint, server)
+    }
+
+    /// Serves one scripted reply per connection and hands back every request it
+    /// saw, so a test can assert how many round trips a client actually needed.
+    fn spawn_scripted_rpc_server(responses: Vec<Value>) -> (String, JoinHandle<Vec<Value>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock server must bind");
+        let endpoint = format!(
+            "http://{}",
+            listener.local_addr().expect("listener has an address")
+        );
+        let server = thread::spawn(move || {
+            let mut seen = Vec::new();
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("mock request must connect");
+                let body = read_request_body(&mut stream);
+                seen.push(serde_json::from_slice(&body).expect("mock request body must be JSON"));
+                write_response(&mut stream, 200, &response.to_string());
+            }
+            seen
+        });
+        (endpoint, server)
+    }
+
+    fn batch_result(id: u64, result: &str) -> Value {
+        json!({ "jsonrpc": "2.0", "id": id, "result": result })
+    }
+
+    fn sample_batch_calls() -> Vec<BatchCall<'static>> {
+        vec![
+            BatchCall::new("proof simulation", "eth_call", json!(["0x01", "latest"])),
+            BatchCall::new("proof gas estimate", "eth_estimateGas", json!(["0x02"])),
+            BatchCall::new(
+                "miner account transaction count",
+                "eth_getTransactionCount",
+                json!(["0x03", "pending"]),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_batch_of_reads_travels_in_one_round_trip() {
+        let calls = sample_batch_calls();
+        // Answered out of order to prove each result is matched by id, not position.
+        let (endpoint, server) = spawn_scripted_rpc_server(vec![json!([
+            batch_result(3, "0x2a"),
+            batch_result(1, "0x01"),
+            batch_result(2, "0x5208"),
+        ])]);
+        let reader = RpcChainReader::new(endpoint, MINING_CORE, EXPECTED_CHAIN_ID);
+
+        let results = reader.rpc_batch(&calls);
+
+        let seen = server.join().expect("mock server must finish");
+        assert_eq!(seen.len(), 1, "a batch must cost exactly one round trip");
+        let sent = seen[0].as_array().expect("the client must send an array");
+        assert_eq!(sent.len(), 3);
+        assert_eq!(
+            sent.iter()
+                .map(|entry| entry["id"].as_u64())
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(
+            sent.iter()
+                .map(|entry| entry["method"].as_str().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>(),
+            vec!["eth_call", "eth_estimateGas", "eth_getTransactionCount"]
+        );
+        assert_eq!(
+            results.iter().map(batch_string_result).collect::<Vec<_>>(),
+            vec![
+                Ok("0x01".to_owned()),
+                Ok("0x5208".to_owned()),
+                Ok("0x2a".to_owned())
+            ]
+        );
+    }
+
+    fn batch_string_result(result: &Result<Value, String>) -> Result<String, String> {
+        batch_string(result, "read")
+    }
+
+    #[test]
+    fn a_per_call_error_is_reported_without_reissuing_the_batch() {
+        let calls = sample_batch_calls();
+        let (endpoint, server) = spawn_scripted_rpc_server(vec![json!([
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": { "code": 3, "message": "execution reverted: StaleChallengeId(1, 2)" }
+            }),
+            batch_result(2, "0x5208"),
+            batch_result(3, "0x2a"),
+        ])]);
+        let reader = RpcChainReader::new(endpoint, MINING_CORE, EXPECTED_CHAIN_ID);
+
+        let results = reader.rpc_batch(&calls);
+
+        let seen = server.join().expect("mock server must finish");
+        assert_eq!(
+            seen.len(),
+            1,
+            "a per-call error is an answer, not a failure"
+        );
+        let error = results[0]
+            .as_ref()
+            .expect_err("the simulation must report its error");
+        assert!(
+            error.contains("StaleChallengeId"),
+            "a reverted simulation must survive batching: {error}"
+        );
+        assert_eq!(batch_string_result(&results[1]), Ok("0x5208".to_owned()));
+        assert_eq!(batch_string_result(&results[2]), Ok("0x2a".to_owned()));
+    }
+
+    #[test]
+    fn a_node_that_answers_with_one_object_forces_a_sequential_reread() {
+        let calls = sample_batch_calls();
+        let (endpoint, server) = spawn_scripted_rpc_server(vec![
+            // A node that ignores batching replies to the array with one object.
+            batch_result(1, "0x01"),
+            batch_result(1, "0x01"),
+            batch_result(1, "0x5208"),
+            batch_result(1, "0x2a"),
+        ]);
+        let reader = RpcChainReader::new(endpoint, MINING_CORE, EXPECTED_CHAIN_ID);
+
+        let results = reader.rpc_batch(&calls);
+
+        let seen = server.join().expect("mock server must finish");
+        assert_eq!(
+            seen.len(),
+            4,
+            "an unusable batch must be reissued one by one"
+        );
+        // The first request is the batch that was refused; the rest are the rereads.
+        for (request, expected_method) in
+            seen[1..]
+                .iter()
+                .zip(["eth_call", "eth_estimateGas", "eth_getTransactionCount"])
+        {
+            assert_eq!(request["method"], expected_method);
+        }
+        assert_eq!(
+            results.iter().map(batch_string_result).collect::<Vec<_>>(),
+            vec![
+                Ok("0x01".to_owned()),
+                Ok("0x5208".to_owned()),
+                Ok("0x2a".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_repeated_id_in_a_batch_reply_forces_a_sequential_reread() {
+        let calls = sample_batch_calls();
+        let (endpoint, server) = spawn_scripted_rpc_server(vec![
+            // A repeated id leaves one call answered twice and another unanswered.
+            json!([
+                batch_result(1, "0x01"),
+                batch_result(1, "0x5208"),
+                batch_result(3, "0x2a")
+            ]),
+            batch_result(1, "0x01"),
+            batch_result(1, "0x5208"),
+            batch_result(1, "0x2a"),
+        ]);
+        let reader = RpcChainReader::new(endpoint, MINING_CORE, EXPECTED_CHAIN_ID);
+
+        let results = reader.rpc_batch(&calls);
+
+        let seen = server.join().expect("mock server must finish");
+        assert_eq!(seen.len(), 4, "a mismatched id must be reissued one by one");
+        assert_eq!(batch_string_result(&results[0]), Ok("0x01".to_owned()));
+        assert_eq!(batch_string_result(&results[2]), Ok("0x2a".to_owned()));
+    }
+
+    #[test]
+    fn a_short_batch_reply_forces_a_sequential_reread() {
+        let calls = sample_batch_calls();
+        let (endpoint, server) = spawn_scripted_rpc_server(vec![
+            json!([batch_result(1, "0x01"), batch_result(2, "0x5208")]),
+            batch_result(1, "0x01"),
+            batch_result(1, "0x5208"),
+            batch_result(1, "0x2a"),
+        ]);
+        let reader = RpcChainReader::new(endpoint, MINING_CORE, EXPECTED_CHAIN_ID);
+
+        let results = reader.rpc_batch(&calls);
+
+        let seen = server.join().expect("mock server must finish");
+        assert_eq!(
+            seen.len(),
+            4,
+            "a missing answer must be reissued one by one"
+        );
+        assert_eq!(batch_string_result(&results[2]), Ok("0x2a".to_owned()));
+    }
+
+    #[test]
+    fn a_single_read_is_never_wrapped_in_a_batch() {
+        let calls = vec![BatchCall::new(
+            "proof simulation",
+            "eth_call",
+            json!(["0x01", "latest"]),
+        )];
+        let (endpoint, server) = spawn_scripted_rpc_server(vec![batch_result(1, "0x01")]);
+        let reader = RpcChainReader::new(endpoint, MINING_CORE, EXPECTED_CHAIN_ID);
+
+        let results = reader.rpc_batch(&calls);
+
+        let seen = server.join().expect("mock server must finish");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0]["method"], "eth_call", "one read needs no array");
+        assert_eq!(batch_string_result(&results[0]), Ok("0x01".to_owned()));
     }
 
     fn spawn_raw_rpc_server(response: Vec<u8>) -> (String, JoinHandle<()>) {
