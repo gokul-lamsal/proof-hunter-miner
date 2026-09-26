@@ -746,24 +746,43 @@ fn watched_mine(
         .name("bproof-challenge-watcher".to_owned())
         .spawn(move || {
             let reader = RpcChainReader::new(endpoint, mining_core, chain_id);
+            // A marker is pinned to a block tag, so an unchanged tag cannot hide
+            // a challenge change. Re-reading the four getters on every tick would
+            // add four sequential round trips of blindness to each interval.
+            let mut observed_block: Option<String> = None;
             loop {
+                let observed = (|| {
+                    let block_tag = reader.snapshot_block()?;
+                    if observed_block.as_deref() == Some(block_tag.as_str()) {
+                        return Ok(None);
+                    }
+                    Ok(Some((
+                        block_tag.clone(),
+                        reader.read_challenge_marker_at(&block_tag)?,
+                    )))
+                })();
+                match observed {
+                    Err(error) => {
+                        watcher_control.stop();
+                        return WatchedMining::RpcError(error);
+                    }
+                    Ok(Some((block_tag, current))) => {
+                        if current != expected {
+                            watcher_control.stop();
+                            return WatchedMining::ChallengeMoved(current);
+                        }
+                        observed_block = Some(block_tag);
+                    }
+                    Ok(None) => {}
+                }
+                // Sleep after polling. Sleeping first would add a whole interval
+                // of blindness before the watcher ever looks at the chain.
                 if !wait_for_watch(watch_interval, &watcher_shutdown, &watcher_control) {
                     watcher_control.stop();
                     return WatchedMining::Mining(MiningResult::Abandoned {
                         attempts: 0,
                         threads: 0,
                     });
-                }
-                match reader.read_challenge_marker() {
-                    Ok(current) if current != expected => {
-                        watcher_control.stop();
-                        return WatchedMining::ChallengeMoved(current);
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        watcher_control.stop();
-                        return WatchedMining::RpcError(error);
-                    }
                 }
             }
         })
@@ -984,6 +1003,7 @@ fn completion(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
 
@@ -1222,6 +1242,177 @@ mod tests {
             }
         });
         (endpoint, server)
+    }
+
+    #[test]
+    fn watcher_skips_contract_getters_while_the_snapshot_block_is_unchanged() {
+        let challenge_inputs = ChallengeInputs {
+            chain_id: Uint256::from(31_337_u64),
+            mining_core: Address::from_bytes([0x22; 20]),
+            challenge_id: Uint256::ONE,
+            previous_accepted_digest: proof_core::Digest::ZERO,
+            seed_parent_block: Uint256::from(1_003_u64),
+            seed_blockhash: proof_core::Digest::from_bytes([0x44; 32]),
+        };
+        let core = challenge_inputs.mining_core;
+        let challenge = proof_core::derive_challenge(&challenge_inputs);
+        let block_tag = "0x10";
+
+        // The chain reports a marker matching the work already being searched,
+        // and an `eth_blockNumber` that never advances.
+        let one = json!(hex_string(&Uint256::ONE.to_be_bytes()));
+        let mut routes = HashMap::new();
+        for (signature, value) in [
+            ("challengeState()", one.clone()),
+            ("activeChallengeId()", one),
+            ("previousAcceptedDigest()", json!(word_hex([0; 32]))),
+            ("currentChallenge()", json!(word_hex(challenge.to_bytes()))),
+        ] {
+            routes.insert(
+                route_key("eth_call", core_call(core, signature, block_tag)),
+                value,
+            );
+        }
+        routes.insert(route_key("eth_blockNumber", json!([])), json!(block_tag));
+
+        let (endpoint, seen, server) = spawn_routing_server(routes);
+        let request = ContinuousRequest {
+            endpoint,
+            chain_id: challenge_inputs.chain_id,
+            mining_core: core,
+            miner: Address::from_bytes([0x11; 20]),
+            basket: Address::from_bytes([0x55; 20]),
+            keystore: PathBuf::from("unused"),
+            passphrase_file: None,
+            fee_options: FeeOptions {
+                fee_ceiling_wei: 1,
+                base_fee_per_gas_override_wei: None,
+                priority_fee_per_gas_override_wei: None,
+                gas_margin_percent: 25,
+            },
+            threads: 2,
+            start_nonce: Uint256::ZERO,
+            watch_interval: Duration::from_millis(5),
+        };
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let stopper = Arc::clone(&shutdown);
+        let interrupting = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            stopper.store(true, Ordering::Release);
+        });
+
+        let outcome = watched_mine(
+            &request,
+            &challenge_inputs,
+            Target::from_be_bytes([0; 32]),
+            &shutdown,
+        )
+        .unwrap();
+        interrupting.join().unwrap();
+        server.stop.store(true, Ordering::Release);
+        server.thread.join().unwrap();
+        let seen = seen.lock().unwrap().clone();
+
+        assert!(
+            matches!(
+                outcome,
+                WatchedMining::Mining(MiningResult::Abandoned { .. })
+            ),
+            "an unchanged block must not end the search"
+        );
+        let block_reads = count_calls(&seen, "eth_blockNumber");
+        let eth_calls = count_calls(&seen, "eth_call");
+        assert!(
+            block_reads > 2,
+            "expected repeated block polling, saw {block_reads}"
+        );
+        // Many watcher ticks elapsed, yet the getters were read exactly once: an
+        // unchanged snapshot block cannot change the marker it pins.
+        assert_eq!(eth_calls, 4, "getters re-read despite a static block");
+    }
+
+    fn count_calls(seen: &[String], method: &str) -> usize {
+        seen.iter().filter(|seen| seen.as_str() == method).count()
+    }
+
+    fn route_key(method: &str, params: Value) -> String {
+        serde_json::to_string(&json!({"method": method, "params": params}))
+            .expect("route key must encode")
+    }
+
+    fn core_call(core: Address, signature: &str, block_tag: &str) -> Value {
+        let selector = hex_string(&proof_core::keccak256(signature.as_bytes()).to_bytes()[..4]);
+        json!([
+            {"to": hex_string(&core.to_bytes()), "data": selector},
+            block_tag,
+        ])
+    }
+
+    struct RoutingServer {
+        thread: thread::JoinHandle<()>,
+        stop: Arc<AtomicBool>,
+    }
+
+    /// Serves requests by routing on method and params, recording each method.
+    fn spawn_routing_server(
+        routes: HashMap<String, Value>,
+    ) -> (String, Arc<Mutex<Vec<String>>>, RoutingServer) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
+
+        let handle = thread::spawn(move || {
+            while !stopping.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        // A non-blocking listener hands the flag to the accepted
+                        // socket on some platforms; body reads must block.
+                        stream.set_nonblocking(false).unwrap();
+                        let body = read_http_request(&mut stream);
+                        let request: Value =
+                            serde_json::from_slice(&body).expect("request body must be JSON");
+                        let method = request["method"]
+                            .as_str()
+                            .expect("request must name a method")
+                            .to_owned();
+                        let result = routes
+                            .get(&route_key(&method, request["params"].clone()))
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                panic!("mock server received an unrouted request: {request}")
+                            });
+                        recorded.lock().unwrap().push(method);
+                        let response =
+                            json!({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                                .to_string();
+                        write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            response.len(),
+                            response
+                        )
+                        .unwrap();
+                        stream.flush().unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        (
+            endpoint,
+            seen,
+            RoutingServer {
+                thread: handle,
+                stop,
+            },
+        )
     }
 
     fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {

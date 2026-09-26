@@ -350,19 +350,37 @@ impl RpcChainReader {
         chain_id == self.expected_chain_id && core == self.mining_core_address
     }
 
-    pub(crate) fn read_challenge_marker(&self) -> Result<ChallengeMarker, String> {
+    /// Reads only the current snapshot block tag, without any contract calls.
+    ///
+    /// A challenge marker is entirely determined by the block it is pinned to,
+    /// so a caller that already holds an unchanged tag can skip re-reading the
+    /// marker: the same tag can only ever produce the same marker.
+    pub(crate) fn snapshot_block(&self) -> Result<String, String> {
         let block_tag =
             self.string_result("watcher snapshot block", "eth_blockNumber", json!([]))?;
         parse_hex_quantity_uint256(&block_tag, "eth_blockNumber watcher result")?;
-        let status = ChallengeStatus::from_word(self.call_word("challengeState()", &block_tag)?)?;
-        let challenge_id = self.call_word("activeChallengeId()", &block_tag)?;
+        Ok(block_tag)
+    }
+
+    pub(crate) fn read_challenge_marker(&self) -> Result<ChallengeMarker, String> {
+        let block_tag = self.snapshot_block()?;
+        self.read_challenge_marker_at(&block_tag)
+    }
+
+    /// Reads the challenge marker at an already-resolved snapshot block tag.
+    pub(crate) fn read_challenge_marker_at(
+        &self,
+        block_tag: &str,
+    ) -> Result<ChallengeMarker, String> {
+        let status = ChallengeStatus::from_word(self.call_word("challengeState()", block_tag)?)?;
+        let challenge_id = self.call_word("activeChallengeId()", block_tag)?;
         let previous_accepted_digest = Digest::from_bytes(
-            self.call_word("previousAcceptedDigest()", &block_tag)?
+            self.call_word("previousAcceptedDigest()", block_tag)?
                 .to_be_bytes(),
         );
         let challenge = if status == ChallengeStatus::Active {
             Some(Digest::from_bytes(
-                self.call_word("currentChallenge()", &block_tag)?
+                self.call_word("currentChallenge()", block_tag)?
                     .to_be_bytes(),
             ))
         } else {
